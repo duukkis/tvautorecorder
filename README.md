@@ -1,5 +1,5 @@
 # tvautorecorder
-Read tvheadend and record movies based on imdb score
+Read tvheadend and automatically record movies based on imdb score
 
 You need file ratings.list from:
 ftp://ftp.funet.fi/pub/mirrors/ftp.imdb.com/pub/
@@ -15,3 +15,4 @@ Prequisites
 1. Create elokuvat (movies in finnish) table described in ratings.php
 2. Run the ratings.php in scripts
 3. See the example.php
+4. Set the script in cron tab to run daily
