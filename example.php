@@ -3,10 +3,9 @@
 include('conn.php');
 include('reader.php');
 
-
 $tv = new tvheadendreader($db, $tvheadend);
 
-$goodMovies = $tv->readChannels();
+$goodMovies = $tv->parseChannels();
 
 print '<pre>';
 // print_r($goodMovies);

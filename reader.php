@@ -26,58 +26,90 @@ class tvheadendreader{
     );
 
   var $movie_length = 90; // minutes
-  var $imdb_rating = 6.9;
+  var $imdb_rating = 7.4;
+  var $tvheadend_movie_genre = 16;
+  
+  var $start = null;
+  var $span = 86400; // 24 h
   
   public function tvheadendreader($db, $tvheadend){
     $this->db = $db;
     $this->tvheadend = $tvheadend;
+    $tomorrow = date("Y-m-d", strtotime("+1 day"));
+    $this->start = strtotime($tomorrow." 00:00:00");
+    $this->end = $this->start + $this->span;
   }
   
-  public function readChannels(){
+  /**
+  * parse the channels and return good movies
+  * @return movies with rating > imdb_rating
+  */
+  public function parseChannels(){
     $goodMovies = array();
 
     foreach($this->channels AS $chan => $cid){
       $url = $this->tvheadend."/api/epg/events/grid";
       $myvars = "dir=ASC&limit=400&sort=start&start=0&channel=".$cid[0];
-
-      $ch = curl_init( $url );
-      curl_setopt( $ch, CURLOPT_POST, 1);
-      curl_setopt( $ch, CURLOPT_POSTFIELDS, $myvars);
-      curl_setopt( $ch, CURLOPT_FOLLOWLOCATION, 1);
-      curl_setopt( $ch, CURLOPT_HEADER, 0);
-      curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true);
-
-      $c = curl_exec( $ch );
+      $c = $this->postRequest($url, $myvars);
+      
       $movies = $this->parseChannelData($c);
       $goodMovies = array_merge($goodMovies, $this->goodMovies($movies));
-      curl_close($ch);
+      
     }
     return $goodMovies;
   }
   
   /**
+  * make a request with curl
+  * @param string $url to make the post on
+  * @param string $vars variables on a list
+  * @return string - the response
+  */
+  private function postRequest($url, $vars){
+    $ch = curl_init( $url );
+    curl_setopt( $ch, CURLOPT_POST, 1);
+    curl_setopt( $ch, CURLOPT_POSTFIELDS, $vars);
+    curl_setopt( $ch, CURLOPT_FOLLOWLOCATION, 1);
+    curl_setopt( $ch, CURLOPT_HEADER, 0);
+    curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true);
+    $c = curl_exec( $ch );
+    curl_close($ch);
+    return $c;
+  }
+  
+  /**
   * parse channel data and pick out the movies
+  * @param string - json formatted string
+  * @return array
   */
   private function parseChannelData($c){
     $movies = array();
     $programs = json_decode($c);
-    foreach($programs->entries AS $p) {
-      if ($p->stop - $p->start > ($this->movie_length * 60) && isset($p->title)){ // movie duration must be over x seconds
-        if(isset($p->genre) && in_array(16, $p->genre)) {
-          array_push($movies, $p);
-        } else if(substr($p->title,0,7) == "Elokuva"){ // Elokuva
-          array_push($movies, $p);
+    if(isset($programs->entries)){
+      foreach($programs->entries AS $p) {
+        // get the movies starting within span (default 24h)
+        if($p->start > $this->start && $this->start <= $this->end){
+          // movie duration must be over x seconds and title be set
+          if ($p->stop - $p->start > ($this->movie_length * 60) && isset($p->title)){
+            // movie genre
+            if(isset($p->genre) && in_array($this->tvheadend_movie_genre, $p->genre)) {
+              array_push($movies, $p);
+            // sometimes movies are only prepended with text Elokuva
+            } else if(substr($p->title,0,7) == "Elokuva"){
+              array_push($movies, $p);
+            }
+          }
         }
       }
     }
-    // \b(19|20)\d{2}\b
-    //print_r($movies);
     return $movies;
   }
   
   
   /**
-  * find out about the good movies
+  * filter out the good movies from all movies
+  * @param array - movie array
+  * @return array - movies that have rating > $this->imdb_rating
   */
   private function goodMovies($movies){
     $goodMovies = array();
@@ -85,6 +117,7 @@ class tvheadendreader{
       foreach($movies AS $i => $movie){
         $rating = 0;
         $match = null;
+        // find the year from subtitle
         if(isset($movie->subtitle)){
           preg_match('/((19|20)\d{2})/', $movie->subtitle, $match);
         } else {
@@ -93,15 +126,15 @@ class tvheadendreader{
 
         if(isset($match[1])){
           $year = $match[1];
-          // print $year;
-          $rating = $this->findMovieRating($movie->title, $movie->subtitle, $year);
+          // search with year
+          $rating = $this->searchMovieRating($movie->title, $movie->subtitle, $year);
         } else {
-          $rating = $this->findMovieRating($movie->title, $movie->subtitle);
+          // search without year
+          $rating = $this->searchMovieRating($movie->title, $movie->subtitle);
         }
         if($rating > $this->imdb_rating){
           $movie->imdb = $rating;
           array_push($goodMovies, $movie);
-        } else {
         }
       }
     }
@@ -109,27 +142,24 @@ class tvheadendreader{
   }
   
   /**
-  * set the recording
+  * set the recording on tvheadend
+  * @param int event_id - movie event to set the recording onto
+  * @return void
   */
   public function recordMovie($event_id){
     $url = $this->tvheadend."/api/dvr/entry/create_by_event";
     $myvars = "config_uuid=&event_id=".$event_id;
-    
-    $ch = curl_init( $url );
-    curl_setopt( $ch, CURLOPT_POST, 1);
-    curl_setopt( $ch, CURLOPT_POSTFIELDS, $myvars);
-    curl_setopt( $ch, CURLOPT_FOLLOWLOCATION, 1);
-    curl_setopt( $ch, CURLOPT_HEADER, 0);
-    curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true);
-
-    $c = curl_exec( $ch );    
-    curl_close($ch);
+    $c = $this->postRequest($url, $myvars);
   }
   
   /**
-  *
+  * search a raring based on title, subtitle (longer description) and year
+  * @param string $title - title to search on
+  * @param string $title - subtitle to search on
+  * @param string $year - year to search on
+  * @return int imdb rating found on db, 0 if not found
   */
-  private function findMovieRating($title, $subtitle, $year = null){
+  private function searchMovieRating($title, $subtitle, $year = null){
     if(mb_substr($title, 0, 8) == "Elokuva:"){
       $title = mb_substr($title, 8);
     }
@@ -164,6 +194,12 @@ class tvheadendreader{
     return 0;
   }
   
+  /**
+  * find a single movie based on title / slash year
+  * @param string $title - title to search on
+  * @param string $year - year to search on
+  * @return int imdb rating found on db, 0 if not found
+  */
   private function findMovie($title, $year){
     $title = trim($title);
     // print $title.$year."\n";
